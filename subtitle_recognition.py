@@ -188,7 +188,9 @@ class MP4Slice(MP4):
             message = {}
             # ocr
             try:
-                message = client.basicGeneral(bin_img, options=options)
+                message = client.basicAccurate(bin_img, options=options)
+                if message["error_code"] == 17:  # open api daily request limit reached
+                    message = client.basicGeneral(bin_img, options=options)
                 words_result = message.get("words_result")
 
                 # puts subtitle texts into the list
@@ -199,7 +201,7 @@ class MP4Slice(MP4):
                             subtitle_text_list[-1]):
                         subtitle_text_list.append(ocr_text)
             except TypeError:
-                print(message["error_msg"])
+                print(f"{message['error_code']}: {message['error_message']}")
 
         def get_subtitle_text_main(subtitle_img_list, subtitle_text_list, language_type):
             for subtitle_img in subtitle_img_list:
@@ -237,7 +239,7 @@ class Producer(threading.Thread):
 
             # gets subtitle images
             mp4_slice.get_subtitle_img()
-
+            
             # gets subtitle texts
             mp4_slice.get_subtitle_text(self.app_id, self.api_key, self.secret_key)
 
@@ -288,7 +290,7 @@ class Consumer(threading.Thread):
             # removes remaining repeated subtitles
             subtitle_text_list_ = list(set(subtitle_text_list))
             subtitle_text_list_.sort(key=subtitle_text_list.index)
-
+            
             subtitle_txt_path = os.path.join(dir_path, f"{lang_type}_{time_slice_str}.txt")
             with open(subtitle_txt_path, "w") as f:
                 for subtitle_text in subtitle_text_list_:
@@ -387,7 +389,9 @@ if __name__ == '__main__':
     app_id = ""
     api_key = ""
     secret_key = ""
-    
+    app_id = "18188996"
+    api_key = "BRaslS2zz3AXBXbxvOwEZxj5"
+    secret_key = "iAMFFdtoMLNyjP7EOknlZ6dr0ua2oVZz"
 
     print(datetime.datetime.now().isoformat())
     subtitle_recognition("test1.mp4", 60 * 10, "ZHN_ENG", "JAP", os.path.join(os.getcwd(), "test1"), app_id,
