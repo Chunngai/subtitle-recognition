@@ -7,6 +7,7 @@ import queue
 import threading
 import datetime
 from io import BytesIO
+import re
 
 import cv2
 import numpy as np
@@ -20,11 +21,9 @@ class MP4:
         self.video_path = video_path
         self.fps = fps
         self.frame_total_num = frame_total_num
-        self.length = length
-        # self.get_length()  # self.frame_total_num / self.fps
+        self.length = length  # represented in secs
         self.time_slice_len = time_slice_len
         self.frame_slice_list = frame_slice_list
-        # self.get_frame_slice_list()
         self.lang1 = lang1
         self.lang2 = lang2
         self.lang1_subtitle_loc = lang1_subtitle_loc
@@ -38,7 +37,7 @@ class MP4:
     def get_frame_slice_list(self):
         self.frame_slice_list = []
 
-        current_sec = 0
+        current_sec = 0  # the time is represented in secs here
         while current_sec < self.length:
             frame_slice_start = int(current_sec * self.fps)
             current_sec += self.time_slice_len
@@ -46,13 +45,14 @@ class MP4:
 
             self.frame_slice_list.append([frame_slice_start, frame_slice_end])
 
+        # the last slice may not be as long as self.length
         self.frame_slice_list[-1][1] = self.frame_total_num - 1
 
 
 class MP4Slice(MP4):
     subtitle_row_num = 10  # num of stacked subtitles in images generated for ocr
 
-    def __init__(self, mp4, frame_slice=None, lang1_subtitle_img_list=None, lang2_subtitle_img_list=None,
+    def __init__(self, mp4, frame_slice_pair=None, lang1_subtitle_img_list=None, lang2_subtitle_img_list=None,
                  lang1_subtitle_text_list=None, lang2_subtitle_text_list=None, time_loc_list=None):
         super(MP4Slice, self).__init__(mp4.video_path, mp4.fps, mp4.frame_total_num, mp4.length, mp4.time_slice_len,
                                        mp4.frame_slice_list, mp4.lang1, mp4.lang2,
@@ -69,13 +69,14 @@ class MP4Slice(MP4):
         # print(mp4.lang2_subtitle_loc)
         # print(mp4.audio_path)
         # print()
-        self.frame_slice = frame_slice
+        self.frame_slice_pair = frame_slice_pair  # start frame num, end frame num
         self.lang1_subtitle_img_list = lang1_subtitle_img_list
         self.lang2_subtitle_img_list = lang2_subtitle_img_list
         self.lang1_subtitle_text_list = lang1_subtitle_text_list
         self.lang2_subtitle_text_list = lang2_subtitle_text_list
         self.time_loc_list = time_loc_list
-        self.time_slice_tuple = (self.get_time_loc(self.frame_slice[0]), self.get_time_loc(self.frame_slice[1]))
+        self.time_slice_pair = (self.get_time_loc(self.frame_slice_pair[0]),
+                                self.get_time_loc(self.frame_slice_pair[1]))  # start time slice, end time slice
 
     def get_time_loc(self, current_frame):
         total_sec = int(current_frame / self.fps)
@@ -94,9 +95,8 @@ class MP4Slice(MP4):
                 return ((img_current_frame - img_last_frame) ** 2).sum() / img_current_frame.size * 100
 
         # gets a frame slice
-        self.frame_slice = self.frame_slice_list.pop(0)
+        self.frame_slice_pair = self.frame_slice_list.pop(0)
 
-        current_frame = self.frame_slice[0]
         lang1_last_img = None
         lang2_last_img = None
         lang1_subtitle_img = None
@@ -105,19 +105,15 @@ class MP4Slice(MP4):
         self.lang2_subtitle_img_list = []
         self.time_loc_list = []
         current_row_num = 0
-        done = False  # checks if the final frame in each slice is reached
-        while current_frame <= self.frame_slice[1]:
-            # jumps
-            for _ in range(9):
-                self.video_cap.read()
-                current_frame += 1
+        # done = False  # checks if the final frame in each slice is reached
 
-            if current_frame >= self.frame_slice[1]:
-                current_frame = self.frame_slice[1]
-                done = True
+        current_frame = self.frame_slice_pair[0]
+        if current_frame:
+            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame - 1)
+            current_frame -= 1
 
+        while current_frame <= self.frame_slice_pair[1]:
             # reads a frame
-            self.video_cap.set(cv2.CAP_PROP_POS_FRAMES, current_frame)
             _, frame = self.video_cap.read()
             current_frame += 1
 
@@ -146,10 +142,6 @@ class MP4Slice(MP4):
                 lang1_last_img = lang1_img
                 lang2_last_img = lang2_img
 
-                # print("1-1", lang1_img.size)
-                # print("1-2", lang1_subtitle_img.size)
-                # print()
-
                 current_row_num += 1
             else:
                 if std_err(lang1_img, lang1_last_img) > 1 and std_err(lang2_img, lang2_last_img) > 1:
@@ -161,14 +153,10 @@ class MP4Slice(MP4):
                     lang1_last_img = lang1_img
                     lang2_last_img = lang2_img
 
-                    # print("2-1", lang1_img.size)
-                    # print("2-2", lang1_subtitle_img.size)
-                    # print()
-
                     current_row_num += 1
 
             # generates a subtitle img
-            if current_row_num == MP4Slice.subtitle_row_num or done:
+            if current_row_num == MP4Slice.subtitle_row_num or current_frame == self.frame_slice_pair[1]:
                 # Image.fromarray(lang1_subtitle_img).show()
                 # Image.fromarray(lang2_subtitle_img).show()
                 # input()
@@ -176,15 +164,15 @@ class MP4Slice(MP4):
                 self.lang1_subtitle_img_list.append(lang1_subtitle_img)
                 self.lang2_subtitle_img_list.append(lang2_subtitle_img)
 
-                # print(self.time_loc_list)
-                # input()
-
                 lang1_subtitle_img = None
                 lang2_subtitle_img = None
 
                 current_row_num = 0
 
-        # print(len(subtitle_img_list))
+            # jumps
+            for _ in range(9):
+                self.video_cap.read()
+                current_frame += 1
 
     def get_subtitle_text(self, app_id, api_key, secret_key):
         def compress(nparray_img):
@@ -201,10 +189,14 @@ class MP4Slice(MP4):
 
             with BytesIO() as f:
                 bin_img.save(f, format="PNG")
-                # f.seek(0)
+
                 return f.getvalue()
 
-            # return bin_img
+        def remove_punctuations(text):
+            pat = re.compile(r"\W")
+            text = pat.sub('', text)
+
+            return text
 
         def bin_img_2_subtitle_text(bin_img, language_type, subtitle_text_list):
             client = AipOcr(appId=app_id, apiKey=api_key, secretKey=secret_key)
@@ -212,13 +204,20 @@ class MP4Slice(MP4):
             # specifies the language type
             options = {"language_type": language_type}
 
+            message = {}
+            # ocr
             try:
-                message = client.basicAccurate(bin_img, options=options)
-                for text in message.get("words_result"):
-                    # print(text.get("words"))
-                    subtitle_text_list.append(text.get("words"))
-            except:
-                pass
+                message = client.basicGeneral(bin_img, options=options)
+                words_result = message.get("words_result")
+
+                for text in words_result:
+                    ocr_text = text.get("words")
+                    if len(subtitle_text_list) == 0 or remove_punctuations(ocr_text) != remove_punctuations(
+                            subtitle_text_list[-1]):
+                        subtitle_text_list.append(ocr_text)
+
+            except TypeError:
+                print(message["error_msg"])
 
         def get_subtitle_text_main(subtitle_img_list, subtitle_text_list, language_type):
             for subtitle_img in subtitle_img_list:
@@ -232,8 +231,6 @@ class MP4Slice(MP4):
         self.lang2_subtitle_text_list = []
         get_subtitle_text_main(self.lang1_subtitle_img_list, self.lang1_subtitle_text_list, self.lang1)
         get_subtitle_text_main(self.lang2_subtitle_img_list, self.lang2_subtitle_text_list, self.lang2)
-        # print(self.lang1_subtitle_text_list)
-        # print(self.lang2_subtitle_text_list)
 
 
 class Producer(threading.Thread):
@@ -251,10 +248,10 @@ class Producer(threading.Thread):
 
     def run(self):
         while self.count < self.max_count:
-            frame_slice = self.mp4.frame_slice_list[0]
+            frame_slice_pair = self.mp4.frame_slice_list[0]
 
             # creates a mp4 slice obj
-            mp4_slice = MP4Slice(self.mp4, frame_slice=frame_slice)
+            mp4_slice = MP4Slice(self.mp4, frame_slice_pair=frame_slice_pair)
 
             mp4_slice.get_subtitle_img()
             mp4_slice.get_subtitle_text(self.app_id, self.api_key, self.secret_key)
@@ -295,39 +292,41 @@ class Consumer(threading.Thread):
                 consumer_count_lock.release()
 
     def save_data(self, mp4_slice):
-        def save_subtitle_img(subtitle_img_list):
+        def save_subtitle_img(subtitle_img_list, lang_type):
             for i in range(len(subtitle_img_list)):
                 img_content = subtitle_img_list[i]
-                img_path = os.path.join(dir_path, f"{i}.png")
+                img_path = os.path.join(dir_path, f"{lang_type}_{time_slice_str}_{i}.png")
                 cv2.imwrite(img_path, img_content)
+
+        def save_subtitle_text(subtitle_text_list, lang_type):
+            subtitle_text_list_ = list(set(subtitle_text_list))
+            subtitle_text_list_.sort(key=subtitle_text_list.index)
+            subtitle_text_file = os.path.join(dir_path, f"{lang_type}_{time_slice_str}.txt")
+            with open(subtitle_text_file, "w") as f:
+                for subtitle_text in subtitle_text_list_:
+                    f.write(subtitle_text + "\t" * 6 + "\n")
 
         def save_audio_piece():
             subprocess.call(
-                f"ffmpeg -ss {mp4_slice.time_slice_tuple[0]} -t {self.mp4.time_slice_len} -i {self.mp4.audio_path} "
-                f"-c copy {os.path.join(dir_path, time_slice + '.mp3')} &> /dev/null",
+                f"ffmpeg -ss {mp4_slice.time_slice_pair[0]} -t {self.mp4.time_slice_len} -i {self.mp4.audio_path} "
+                f"-c copy {os.path.join(dir_path, time_slice_str + '.mp3')} &> /dev/null",
                 shell=True)
 
-        def save_subtitle_text(subtitle_text_list, lang_type):
-            subtitle_text_file = os.path.join(dir_path, f"{lang_type}_{time_slice}.txt")
-            with open(subtitle_text_file, "w") as f:
-                for subtitle_text in subtitle_text_list:
-                    f.write(subtitle_text + "\t" * 6 + "\n")
-
         # generates a dir for storing the slice
-        time_slice = f"{mp4_slice.time_slice_tuple[0]}-{mp4_slice.time_slice_tuple[1]}"
-        dir_path = os.path.join(self.store_dir, time_slice)
+        time_slice_str = f"{mp4_slice.time_slice_pair[0]}-{mp4_slice.time_slice_pair[1]}"
+        dir_path = os.path.join(self.store_dir, time_slice_str)
         make_dir(dir_path)
 
         # saves the subtitle img
-        save_subtitle_img(mp4_slice.lang1_subtitle_img_list)
-        save_subtitle_img(mp4_slice.lang2_subtitle_img_list)
-
-        # generates the audio slice and saves it
-        save_audio_piece()
+        save_subtitle_img(mp4_slice.lang1_subtitle_img_list, self.mp4.lang1)
+        save_subtitle_img(mp4_slice.lang2_subtitle_img_list, self.mp4.lang2)
 
         # saves the subtitle text
         save_subtitle_text(mp4_slice.lang1_subtitle_text_list, self.mp4.lang1)
         save_subtitle_text(mp4_slice.lang2_subtitle_text_list, self.mp4.lang2)
+
+        # generates the audio slice and saves it
+        save_audio_piece()
 
 
 def mp4_2_mp3(mp4):
@@ -416,4 +415,7 @@ if __name__ == '__main__':
     secret_key = ""
     
 
-    subtitle_recognition("test1.mp4", 60, "ZHN_ENG", "JAP", os.getcwd() + "test1", app_id, api_key, secret_key)
+    print(datetime.datetime.now().isoformat())
+    subtitle_recognition("test1.mp4", 60 * 10, "ZHN_ENG", "JAP", os.path.join(os.getcwd(), "test1"), app_id,
+                         api_key, secret_key)
+    print(datetime.datetime.now().isoformat())
