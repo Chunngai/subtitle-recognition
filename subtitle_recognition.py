@@ -533,9 +533,10 @@ if __name__ == '__main__':
                         help="path of the video")
     parser.add_argument("--time-slice-len", "-t", action="store", default=60, type=int,
                         help="length of the time slice (sec), 60 by default")
-    parser.add_argument("--lang", "-l", action="store", required=True, nargs=2,
+    parser.add_argument("--lang", "-l", action="store", required=True, nargs=2, metavar=("lang1", "lang2"),
                         choices=["CHN", "ENG", "POR", "FRE", "GER", "ITA", "SPA", "RUS", "JAP", "KOR"],
-                        help="languages of the subtitle")
+                        help='languages of the subtitle in ["CHN", "ENG", "POR", "FRE", "GER", "ITA", "SPA", "RUS", '
+                             '"JAP", "KOR"]')
     parser.add_argument("--store-dir", "-d", action="store", default=os.getcwd(), help="directory for saving data")
     parser.add_argument("--app-id", action="store", required=True, help="app id of baidu ocr")
     parser.add_argument("--api-key", action="store", required=True, help="api key id of baidu ocr")
