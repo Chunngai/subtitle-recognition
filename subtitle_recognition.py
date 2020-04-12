@@ -236,7 +236,7 @@ class MP4Slice(MP4):
 
                 current_row_num = 0
 
-            # jumps
+            # skips
             for _ in range(9):
                 self.video_cap.read()
                 current_frame += 1
