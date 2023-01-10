@@ -89,9 +89,9 @@ def get_bounds(video_cap, n_frames: int, lang1: str, lang2: str) -> tuple:
             lang_bounds.append(y)
 
             # Visualize the click.
-            cv2.circle(img=img_cp, center=(x, y), radius=2, color=(255, 0, 0), thickness=-1)
+            cv2.circle(img=img_cp, center=(x, y), radius=3, color=(0, 255, 0), thickness=-1)
             cv2.putText(img=img_cp, text=f"x: {x}, y: {y}", org=(x, y), fontFace=cv2.FONT_HERSHEY_PLAIN,
-                        fontScale=1.0, color=(255, 0, 0), thickness=1)
+                        fontScale=1.0, color=(0, 255, 0), thickness=1)
             cv2.imshow(window_name, img_cp)
 
     def get(lang):
@@ -265,6 +265,38 @@ def is_same(img1: np.ndarray, img2: np.ndarray) -> bool:
     return stderr(img1=img1, img2=img2) <= 1
 
 
+def accept_imgs(
+        lang1_img: np.ndarray, lang2_img: np.ndarray, last_lang1_img: np.ndarray, last_lang2_img: np.ndarray,
+        bin_thred: float
+) -> bool:
+    """Image validation.
+
+    :param lang1_img: Image for lang1.
+    :param lang2_img: Image for lang2.
+    :param last_lang1_img: Last image for lang1.
+    :param last_lang2_img: Last image for lang2.
+    :param bin_thred: Binarization threshold.
+    :return: True if both images contain text different from the last ones, else False.
+    """
+
+    # Binarization.
+    _, lang1_img = cv2.threshold(lang1_img, bin_thred, 255, cv2.THRESH_BINARY)
+    _, lang2_img = cv2.threshold(lang2_img, bin_thred, 255, cv2.THRESH_BINARY)
+
+    _, last_lang1_img = cv2.threshold(last_lang1_img, bin_thred, 255, cv2.THRESH_BINARY)
+    _, last_lang2_img = cv2.threshold(last_lang2_img, bin_thred, 255, cv2.THRESH_BINARY)
+
+    # Empty check.
+    if not has_text(img=lang1_img) or not has_text(img=lang2_img):
+        return False
+
+    # Duplication check.
+    if is_same(img1=lang1_img, img2=last_lang1_img) or is_same(img1=lang2_img, img2=last_lang2_img):
+        return False
+
+    return True
+
+
 def compress(img: np.ndarray, threshold: int) -> Image:
     """Compress the image.
 
@@ -289,7 +321,7 @@ def compress(img: np.ndarray, threshold: int) -> Image:
     return new_img
 
 
-def ocr(img: Image, lang: str, api_config: dict) -> list:
+def ocr(img: Image, lang: str, api_config: dict) -> str:
     """Recognize text from the image.
 
     :param img: Image containing text.
@@ -313,7 +345,7 @@ def ocr(img: Image, lang: str, api_config: dict) -> list:
     )
 
     options = {"language_type": lang}
-    for ocr_api in [ocr_client.basicAccurate, ocr_client.basicGeneral]:
+    for ocr_api in [ocr_client.basicAccurate, ocr_client.accurate, ocr_client.basicGeneral, ocr_client.general]:
         rst = ocr_api(
             image=img,
             options=options
@@ -333,6 +365,27 @@ def ocr(img: Image, lang: str, api_config: dict) -> list:
         text = text + word_rst.get("words")
 
     return text
+
+
+def accept_text(lang1_text: str, lang2_text: str, last_lang1_text: str, last_lang2_text: str) -> bool:
+    """Text validation.
+
+    :param lang1_text: Recognized text for lang1.
+    :param lang2_text: Recognized text for lang2.
+    :param last_lang1_text: Last recognized text for lang1.
+    :param last_lang2_text: Last recognized text for lang2.
+    :return: True if both texts are not empty and different from the last ones, else False.
+    """
+
+    # Empty check.
+    if len(lang1_text) == 0 or len(lang2_text) == 0:
+        return False
+
+    # Duplication check.
+    if lang1_text == last_lang1_text or lang2_text == last_lang2_text:
+        return False
+
+    return True
 
 
 def main(args: argparse.Namespace):
@@ -421,45 +474,43 @@ def main(args: argparse.Namespace):
         # Convert the frame to an image.
         img = frame[:, :, 0]
 
-        # Crop for the subtitle area.
+        # Crop for the subtitle areas.
         lang1_img = img[lang1_upper:lang1_lower, :]
         lang2_img = img[lang2_upper:lang2_lower, :]
 
-        # Binarization.
-        _, lang1_img = cv2.threshold(lang1_img, args.bin_thred, 255, cv2.THRESH_BINARY)
-        _, lang2_img = cv2.threshold(lang2_img, args.bin_thred, 255, cv2.THRESH_BINARY)
-
-        if not has_text(img=lang1_img) or not has_text(img=lang2_img):
+        if not accept_imgs(
+                lang1_img=lang1_img, lang2_img=lang2_img,
+                last_lang1_img=last_imgs[lang1], last_lang2_img=last_imgs[lang2],
+                bin_thred=args.bin_thred
+        ):
             continue
-        if is_same(img1=lang1_img, img2=last_imgs[lang1]) or is_same(img1=lang2_img, img2=last_imgs[lang2]):
-            continue
+        else:
+            last_imgs[lang1] = lang1_img
+            last_imgs[lang2] = lang2_img
         print(f"Processing {frame2time(frame_idx=curr_frame, fps=fps)}")
 
-        # Compress the image.
+        # Compress the images.
         lang1_img = compress(img=lang1_img, threshold=args.cmp_thred)
         lang2_img = compress(img=lang2_img, threshold=args.cmp_thred)
 
-        # Recognize text in the image with Baidu OCR.
+        # Recognize text in the images with Baidu OCR.
         lang1_text = ocr(img=lang1_img, lang=lang1, api_config=api_config)
         lang2_text = ocr(img=lang2_img, lang=lang2, api_config=api_config)
-        # Duplication check.
-        if lang1_text == last_subtitles[lang1] or lang2_text == last_subtitles[lang2]:
+
+        if not accept_text(
+                lang1_text=lang1_text, lang2_text=lang2_text,
+                last_lang1_text=last_subtitles[lang1], last_lang2_text=last_subtitles[lang2],
+        ):
             continue
-        # Empty check.
-        if len(lang1_text) == 0 or len(lang2_text) == 0:
-            continue
+        else:
+            last_subtitles[lang1] = lang1_text
+            last_subtitles[lang2] = lang2_text
 
         subtitles.append({
             "time": frame2time(frame_idx=curr_frame, fps=fps),
             lang1: lang1_text,
             lang2: lang2_text,
         })
-
-        last_imgs[lang1] = lang1_img
-        last_imgs[lang2] = lang2_img
-
-        last_subtitles[lang1] = lang1_text
-        last_subtitles[lang2] = lang2_text
 
     video_name = os.path.splitext(args.video)[0]
     fp_txt = f"{video_name}.txt"
