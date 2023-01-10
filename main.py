@@ -11,133 +11,148 @@ from PIL import Image
 from aip import AipOcr
 
 
-def get_bounds(video_cap, lang1: str, lang2: str) -> dict:
+def solve_langs(lang1: str, lang2: str) -> tuple:
+    """Convert CHN / ENG to CHN_ENG.
+
+    :param lang1: Language 1.
+    :param lang2: Language 2.
+    :return: (lang1, lang2).
+    """
+
+    chn = "CHN"
+    chn_eng = "CHN_ENG"
+
+    if lang1 == chn:
+        lang1 = chn_eng
+    if lang2 in chn:
+        lang2 = chn_eng
+
+    return lang1, lang2
+
+
+def get_bounds(video_cap, n_frames: int, lang1: str, lang2: str) -> tuple:
     """Get the upper and lower bounds of the subtitles in lang1 and lang2.
 
     :param video_cap: Video to process.
+    :param n_frames: Total frames.
     :param lang1: Language 1.
     :param lang2: Language 2.
-    :return: {
-        lang1: {
-            upper: UPPER_BOUND
-            lower: LOWER_BOUND
-        },
-        lang2: {
-            upper: UPPER_BOUND
-            lower: LOWER_BOUND
-        }
-    }
+    :return: (
+        lang1_upper, lang1_lower,
+        lang2_upper, lang2_lower
+    )
     """
 
-    def on_event_left_button(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
+    # Enter key.
+    enter_key = 13
+    # ESC key.
+    esc_key = 27
+    # Space key.
+    space_key = 32
+
+    # Waiting time (milli seconds).
+    waiting_time = 30 * 1_000
+
+    def display_frame():
+        """Display a frame with subtitles."""
+
+        nonlocal img
+        nonlocal img_cp
+
+        while True:
+            # Randomly pick a frame to display.
+            curr_frame = random.randint(0, n_frames)
+
+            # Display the picked frame.
+            video_cap.set(cv2.CAP_PROP_POS_FRAMES, curr_frame)
+            _, img = video_cap.read()
+            img_cp = img.copy()
+
+            # Check if the frame contains subtitles.
+            print("Press <Enter> if there are subtitles in the frame, else press <Space>.")
+            cv2.imshow(window_name, img_cp)
+            key = cv2.waitKey(waiting_time)
+            while key not in [enter_key, space_key]:
+                print("Press <Enter> or <Space> only.")
+                try_open()
+                key = cv2.waitKey(waiting_time)
+
+            if key == enter_key:
+                break
+
+    def mark(e, x, y, f, p, lang_bounds):
+        """Mark the clicked locations."""
+
+        if e == cv2.EVENT_LBUTTONDOWN:
             # Left-clicked.
             # Add the y-coordinate to the list.
-            loc.append(y)
+            lang_bounds.append(y)
 
-            # Visualize the mouce action.
+            # Visualize the click.
             cv2.circle(img=img_cp, center=(x, y), radius=2, color=(255, 0, 0), thickness=-1)
             cv2.putText(img=img_cp, text=f"x: {x}, y: {y}", org=(x, y), fontFace=cv2.FONT_HERSHEY_PLAIN,
                         fontScale=1.0, color=(255, 0, 0), thickness=1)
             cv2.imshow(window_name, img_cp)
 
-    def get_loc(lang, lang_bounds, img):
-        print(f"Click the upper and lower bounds of the {lang} subtitle. "
-              f"Press <Enter> to finish locating. Press <ESC> to redo.")
+    def get(lang):
+        nonlocal img_cp
+
+        lang_bounds = []
         while True:
-            nonlocal loc
-            nonlocal img_cp
-
-            cv2.setMouseCallback(window_name, on_event_left_button)
-            key = cv2.waitKey(15 * 1_000)
-            try_open()
-
-            if len(loc) == 2:
-                lang_bounds[0] = loc[0]
-                lang_bounds[1] = loc[1]
-                print(f"The upper and lower bounds of the {lang} subtitle: "
-                      f"({lang_bounds[0]}, {lang_bounds[1]})")
-
-                while key not in [enter_key, esc_key]:
-                    print("Press <ESC> or <Enter> only.")
-                    key = cv2.waitKey(15 * 1_000)
-                    try_open()
-
-                if key == enter_key:
-                    img_cp = img.copy()
-                    cv2.imshow(window_name, img_cp)
-
-                    return
-
-            loc = []
-            print(f"Click two points in the frame to specify the upper and lower bounds of the {lang} subtitle.")
-
+            # Clear the marks if any.
             img_cp = img.copy()
             cv2.imshow(window_name, img_cp)
+
+            print(f"Click the upper and lower bounds of the {lang} subtitle. "
+                  f"Press <Enter> to finish locating. Press <ESC> to redo.")
+            cv2.setMouseCallback(window_name, lambda e, x, y, f, p: mark(e, x, y, f, p, lang_bounds))
+            key = cv2.waitKey(waiting_time)
+            try_open()
+            while key not in [enter_key, esc_key]:
+                print("Press <ESC> or <Enter> only.")
+                try_open()
+                key = cv2.waitKey(waiting_time)
+
+            if key == enter_key and len(lang_bounds) == 2 and all(lang_bounds):
+                print(f"The upper and lower bounds of the {lang} subtitle: "
+                      f"({lang_bounds[0]}, {lang_bounds[1]})")
+                return lang_bounds
+            else:
+                print("Click twice.")
+
+            # Redo.
+            lang_bounds = []
 
     def try_open():
         if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) == 0:
             cv2.imshow(window_name, img_cp)
 
-    lang1_bounds = [None, None]
-    lang2_bounds = [None, None]
+    img = None
+    img_cp = None
 
-    # The window for bounds locating.
+    # Create a window for bounds locating.
     window_name = "GetBounds"
     cv2.namedWindow(window_name)
 
-    # Use the middle frame in the video as the init frame to be displayed.
-    n_frames = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    curr_frame = n_frames // 2
+    # Display a frame with subtitles.
+    display_frame()
 
-    # Enter: 13.
-    enter_key = 13
-    # ESC: 27.
-    esc_key = 27
+    # Get bounds for lang1.
+    # lang1_upper, lang1_lower.
+    lang1_bounds = get(lang1)
+    # Get bounds for lang2.
+    # lang2_upper, lang2_lower.
+    lang2_bounds = get(lang2)
 
-    while True:
-        video_cap.set(cv2.CAP_PROP_POS_FRAMES, curr_frame)
-        _, img = video_cap.read()
-        img_cp = img.copy()
-
-        print("Press <ESC> if there is no subtitle in the frame, else press <Enter>.")
-
-        # Display the frame.
-        cv2.imshow(window_name, img_cp)
-        key = cv2.waitKey(15 * 1_000)
-        try_open()
-
-        while key not in [enter_key, esc_key]:
-            print("Press Enter or ESC only")
-            key = cv2.waitKey(15 * 1_000)
-            try_open()
-
-        if key == enter_key:
-            loc = []
-            get_loc(lang1, lang1_bounds, img)
-
-            loc = []
-            get_loc(lang2, lang2_bounds, img)
-
-            cv2.destroyWindow(window_name)
-
-            break
-        else:
-            curr_frame = random.randint(0, n_frames)
+    cv2.destroyWindow(window_name)
 
     # Reset the frame location.
     video_cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
-    return {
-        lang1: {
-            "upper": lang1_bounds[0],
-            "lower": lang1_bounds[1],
-        },
-        lang2: {
-            "upper": lang2_bounds[0],
-            "lower": lang2_bounds[1],
-        }
-    }
+    return (
+        lang1_bounds[0], lang1_bounds[1],
+        lang2_bounds[0], lang2_bounds[1]
+    )
 
 
 def isoformat2secs(time_str: str) -> int:
@@ -153,6 +168,32 @@ def isoformat2secs(time_str: str) -> int:
     seconds = int(second)
 
     return hours + minutes + seconds
+
+
+def solve_frame(start_timestr: str, end_timestr: str, fps: float, n_frames: int) -> tuple:
+    """Determine the start frame and end frame.
+
+    :param start_timestr: Starting time in ISO format.
+    :param end_timestr: Ending time in ISO format.
+    :param fps: Frame per second.
+    :param n_frames: Total frames.
+    :return: (start_frame, end_frame).
+    """
+
+    if start_timestr is not None and end_timestr is not None:
+        # Obtain the starting time and ending time for recognition.
+        start_secs = isoformat2secs(time_str=start_timestr)
+        end_secs = isoformat2secs(time_str=end_timestr)
+
+        # Convert to frame index.
+        # Formula: frame_idx = seconds * fps
+        start_frame = int(start_secs * fps)
+        end_frame = int(end_secs * fps)
+    else:
+        start_frame = 0
+        end_frame = n_frames
+
+    return start_frame, end_frame
 
 
 def secs2isoformat(seconds: int) -> str:
@@ -248,11 +289,12 @@ def compress(img: np.ndarray, threshold: int) -> Image:
     return new_img
 
 
-def ocr(img: Image, lang: str) -> list:
+def ocr(img: Image, lang: str, api_config: dict) -> list:
     """Recognize text from the image.
 
     :param img: Image containing text.
     :param lang: Language of the subtitle.
+    :param api_config: API config for Baidu OCR (app id, api key, secret key).
     :return: Recognized text.
 
     Baidu OCR is used for text recognition.
@@ -265,16 +307,26 @@ def ocr(img: Image, lang: str) -> list:
         img = f.getvalue()
 
     ocr_client = AipOcr(
-        appId=app_id,
-        apiKey=api_key,
-        secretKey=secret_key
+        appId=api_config["app_id"],
+        apiKey=api_config["api_key"],
+        secretKey=api_config["secret_key"]
     )
 
     options = {"language_type": lang}
-    rst = ocr_client.basicGeneral(
-        image=img,
-        options=options
-    )
+    for ocr_api in [ocr_client.basicAccurate, ocr_client.basicGeneral]:
+        rst = ocr_api(
+            image=img,
+            options=options
+        )
+
+        if "error_code" in rst.keys() and rst["error_code"] == 17:
+            # Request limit reached.
+            continue
+        elif "error_code" in rst.keys():
+            print(rst)
+            raise
+        else:
+            break
 
     text = ""
     for word_rst in rst.get("words_result"):
@@ -284,54 +336,70 @@ def ocr(img: Image, lang: str) -> list:
 
 
 def main(args: argparse.Namespace):
-    lang1 = args.lang1
-    lang2 = args.lang2
-    # Fix languages.
-    if lang1 in ["CHN", "ENG"]:
-        lang1 = "CHN_ENG"
-    if lang2 in ["CHN", "ENG"]:
-        lang2 = "CHN_ENG"
-
-    video_name = os.path.splitext(args.video)[0]
-    fp_txt = f"{video_name}.txt"
+    # Solve languages.
+    lang1, lang2 = solve_langs(
+        lang1=args.lang1,
+        lang2=args.lang2
+    )
 
     # Read the video
     video_cap = cv2.VideoCapture(args.video)
-    fps = video_cap.get(cv2.CAP_PROP_FPS)
-    # Process an image per sec.
-    # Subtitles are not likely to change in one second.
-    n_skip = int(fps)
+    fps = video_cap.get(cv2.CAP_PROP_FPS)  # Frame per second.
+    n_frames = int(video_cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     # Obtain the upper and lower bounds of the subtitles.
-    bounds = get_bounds(
+    # Note that lang1 and lang2 before solve_langs() are used
+    # to get rid of CHN_ENG in prompts.
+    (
+        lang1_upper, lang1_lower,
+        lang2_upper, lang2_lower
+    ) = get_bounds(
         video_cap=video_cap,
-        lang1=lang1,
-        lang2=lang2,
+        n_frames=n_frames,
+        lang1=args.lang1,
+        lang2=args.lang2,
     )
-    lang1_upper = bounds[lang1]["upper"]
-    lang1_lower = bounds[lang1]["lower"]
-    lang2_upper = bounds[lang2]["upper"]
-    lang2_lower = bounds[lang2]["lower"]
 
-    # Obtain the start and end for recognition.
-    start_secs = isoformat2secs(time_str=args.start)
-    end_secs = isoformat2secs(time_str=args.end)
-    # Convert to frame index.
-    # Formula: seconds * fps = frame
-    start_frame = start_secs * fps
-    end_frame = end_secs * fps
-
-    subtitles = []
-    # Main loop.
+    # Handle the frame range for recognition.
+    start_frame, end_frame = solve_frame(
+        start_timestr=args.start,
+        end_timestr=args.end,
+        fps=fps,
+        n_frames=n_frames,
+    )
+    video_cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
     curr_frame = start_frame
+
+    api_config = {
+        "app_id": args.app_id,
+        "api_key": args.api_key,
+        "secret_key": args.secret_key
+    }
+
+    # Main loop.
+
+    # {
+    #   start: start,
+    #   lang1: lang1_text,
+    #   lang2: lang2_text,
+    # }
+    subtitles = []
+
+    # Process an image per sec
+    # because subtitles are not likely to change in one second.
+    n_skip = int(fps)
+
+    # For duplication check.
     last_imgs = {
         lang1: None,
         lang2: None,
     }
+    # For duplication check.
     last_subtitles = {
         lang1: None,
         lang2: None
     }
+
     while True:
         # Skip.
         for _ in range(n_skip):
@@ -365,14 +433,15 @@ def main(args: argparse.Namespace):
             continue
         if is_same(img1=lang1_img, img2=last_imgs[lang1]) or is_same(img1=lang2_img, img2=last_imgs[lang2]):
             continue
+        print(f"Processing {frame2time(frame_idx=curr_frame, fps=fps)}")
 
         # Compress the image.
         lang1_img = compress(img=lang1_img, threshold=args.cmp_thred)
         lang2_img = compress(img=lang2_img, threshold=args.cmp_thred)
 
         # Recognize text in the image with Baidu OCR.
-        lang1_text = ocr(img=lang1_img, lang=lang1)
-        lang2_text = ocr(img=lang2_img, lang=lang2)
+        lang1_text = ocr(img=lang1_img, lang=lang1, api_config=api_config)
+        lang2_text = ocr(img=lang2_img, lang=lang2, api_config=api_config)
         # Duplication check.
         if lang1_text == last_subtitles[lang1] or lang2_text == last_subtitles[lang2]:
             continue
@@ -392,29 +461,67 @@ def main(args: argparse.Namespace):
         last_subtitles[lang1] = lang1_text
         last_subtitles[lang2] = lang2_text
 
-        with open(fp_txt, "w", encoding="utf-8") as f:
-            tsv_writer = csv.writer(f, delimiter="\t")
-            tsv_writer.writerow(["time", lang1, lang2])
-            for subtitle in subtitles:
-                tsv_writer.writerow([
-                    subtitle["time"], subtitle[lang1], subtitle[lang2]
-                ])
+    video_name = os.path.splitext(args.video)[0]
+    fp_txt = f"{video_name}.txt"
+    with open(fp_txt, "w", encoding="utf-8") as f:
+        tsv_writer = csv.writer(f, delimiter="\t")
+        tsv_writer.writerow(["time", lang1, lang2])
+        for subtitle in subtitles:
+            tsv_writer.writerow([
+                subtitle["time"], subtitle[lang1], subtitle[lang2]
+            ])
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("--video", required=True, help="A video containing subtitles.")
-    parser.add_argument("--bin-thred", default=220, type=float, help="Threshold for binarizing images. 220 by default.")
-    parser.add_argument("--cmp-thred", default=4_000_000, type=int,
-                        help="Threshold for compressing images. 200+k by default.")
-    parser.add_argument("--lang1", required=True, type=str,
-                        choices=["CHN", "ENG", "POR", "FRE", "GER", "ITA", "SPA", "RUS", "JAP", "KOR"],
-                        help="Language 1 of the subtitle.")
-    parser.add_argument("--lang2", required=True, type=str,
-                        choices=["CHN", "ENG", "POR", "FRE", "GER", "ITA", "SPA", "RUS", "JAP", "KOR"],
-                        help="Language 2 of the subtitle.")
-    parser.add_argument("--start", type=str, help="Start for recognition. E.g., 00:00:00.")
-    parser.add_argument("--end", type=str, help="End for recognition. E.g., 00:10:00.")
+
+    parser.add_argument(
+        "--video", required=True,
+        help="Video containing subtitles."
+    )
+    parser.add_argument(
+        "--lang1", required=True, type=str,
+        choices=["CHN", "ENG", "POR", "FRE", "GER", "ITA", "SPA", "RUS", "JAP", "KOR"],
+        help="Language 1 of the subtitle."
+    )
+    parser.add_argument(
+        "--lang2", required=True, type=str,
+        choices=["CHN", "ENG", "POR", "FRE", "GER", "ITA", "SPA", "RUS", "JAP", "KOR"],
+        help="Language 2 of the subtitle."
+    )
+    parser.add_argument(
+        "--start", type=str,
+        help="Starting time for recognition. E.g., 00:00:00."
+    )
+    parser.add_argument(
+        "--end", type=str,
+        help="Ending time for recognition. E.g., 00:10:00."
+    )
+
+    # Hyper params.
+    parser.add_argument(
+        "--bin-thred", default=220, type=float,
+        help="Threshold for binarizing images. 220 by default."
+    )
+    parser.add_argument(
+        "--cmp-thred", default=4_000_000, type=int,
+        help="Threshold for compressing images. 200+k by default."
+    )
+
+    # API config.
+    parser.add_argument(
+        "--app-id", required=True, type=str,
+        help="App ID of Baidu OCR."
+    )
+    parser.add_argument(
+        "--api-key", required=True, type=str,
+        help="Api key of Baidu OCR."
+    )
+    parser.add_argument(
+        "--secret-key", required=True, type=str,
+        help="Secret key of Baidu OCR."
+    )
+
     args = parser.parse_args()
 
     app_id = "29614200"
